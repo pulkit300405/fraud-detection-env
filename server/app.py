@@ -17,6 +17,9 @@ app = create_app(
     observation_cls=FraudDetectObservation,
     env_name="fraud_detect_env",
 )
+@app.get("/")
+def root():
+    return {"message": "Fraud Detection Env Running"}
 
 def main():
     uvicorn.run(app, host="0.0.0.0", port=7860)

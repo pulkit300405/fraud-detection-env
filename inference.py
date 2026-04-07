@@ -6,9 +6,9 @@ import requests
 from typing import List, Optional
 from openai import OpenAI
 
-API_KEY = os.getenv("API_KEY")
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_KEY = os.environ["API_KEY"]
+API_BASE_URL = os.environ["API_BASE_URL"]
+MODEL_NAME = "gpt-4o-mini"
 ENV_URL = os.getenv("ENV_URL", "http://localhost:8000")
 BENCHMARK = "fraud_detect_env"
 SUCCESS_SCORE_THRESHOLD = 0.5

@@ -138,7 +138,15 @@ def run_episode(client: OpenAI, task: str) -> None:
 
 
 def main():
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    os.environ.pop("OPENAI_API_KEY", None)
+    os.environ.pop("OPENAI_BASE_URL", None)
+    
+    api_key = os.environ["API_KEY"]
+    api_base = os.environ["API_BASE_URL"]
+    
+    print(f"[INFO] Using base_url={api_base}", flush=True)
+    
+    client = OpenAI(base_url=api_base, api_key=api_key)
     for task in TASKS:
         run_episode(client, task)
 

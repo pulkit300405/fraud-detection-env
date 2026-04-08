@@ -3,3 +3,4 @@ name: fraud_detect_env
 type: space
 runtime: fastapi
 entrypoint: app:app
+inference: inference.py

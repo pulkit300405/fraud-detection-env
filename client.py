@@ -21,78 +21,52 @@ class FraudDetectEnv(
     """
     Client for the Fraud Detect Env Environment.
 
-    This client maintains a persistent WebSocket connection to the environment server,
-    enabling efficient multi-step interactions with lower latency.
-    Each client instance has its own dedicated environment session on the server.
+    Maintains a persistent WebSocket connection to the environment server,
+    enabling efficient multi-step fraud investigation episodes.
 
     Example:
-        >>> # Connect to a running server
         >>> with FraudDetectEnv(base_url="http://localhost:8000") as client:
         ...     result = client.reset()
-        ...     print(result.observation.echoed_message)
-        ...
-        ...     result = client.step(FraudDetectAction(message="Hello!"))
-        ...     print(result.observation.echoed_message)
-
-    Example with Docker:
-        >>> # Automatically start container and connect
-        >>> client = FraudDetectEnv.from_docker_image("fraud_detect_env-env:latest")
-        >>> try:
-        ...     result = client.reset()
-        ...     result = client.step(FraudDetectAction(message="Test"))
-        ... finally:
-        ...     client.close()
+        ...     result = client.step(FraudDetectAction(
+        ...         action="investigate:ip_velocity",
+        ...         reasoning="Check for IP anomalies first"
+        ...     ))
     """
 
     def _step_payload(self, action: FraudDetectAction) -> Dict:
-        """
-        Convert FraudDetectAction to JSON payload for step message.
-
-        Args:
-            action: FraudDetectAction instance
-
-        Returns:
-            Dictionary representation suitable for JSON encoding
-        """
+        """Convert FraudDetectAction to JSON payload for step message."""
         return {
-            "message": action.message,
+            "action": action.action,
+            "reasoning": action.reasoning or "",
         }
 
     def _parse_result(self, payload: Dict) -> StepResult[FraudDetectObservation]:
-        """
-        Parse server response into StepResult[FraudDetectObservation].
-
-        Args:
-            payload: JSON response data from server
-
-        Returns:
-            StepResult with FraudDetectObservation
-        """
+        """Parse server response into StepResult[FraudDetectObservation]."""
         obs_data = payload.get("observation", {})
+
         observation = FraudDetectObservation(
-            echoed_message=obs_data.get("echoed_message", ""),
-            message_length=obs_data.get("message_length", 0),
+            session_id=obs_data.get("session_id", ""),
+            logs=obs_data.get("logs", []),
+            step_num=obs_data.get("step_num", 0),
+            signals_revealed=obs_data.get("signals_revealed", {}),
+            available_actions=obs_data.get("available_actions", []),
+            task=obs_data.get("task", ""),
+            difficulty=obs_data.get("difficulty", "easy"),
+            context_hint=obs_data.get("context_hint"),
+            ground_truth=obs_data.get("ground_truth"),
             done=payload.get("done", False),
-            reward=payload.get("reward"),
+            reward=payload.get("reward", 0.0),
             metadata=obs_data.get("metadata", {}),
         )
 
         return StepResult(
             observation=observation,
-            reward=payload.get("reward"),
+            reward=payload.get("reward", 0.0),
             done=payload.get("done", False),
         )
 
     def _parse_state(self, payload: Dict) -> State:
-        """
-        Parse server response into State object.
-
-        Args:
-            payload: JSON response from state request
-
-        Returns:
-            State object with episode_id and step_count
-        """
+        """Parse server response into State object."""
         return State(
             episode_id=payload.get("episode_id"),
             step_count=payload.get("step_count", 0),

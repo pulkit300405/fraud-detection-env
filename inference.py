@@ -5,6 +5,9 @@ import os
 import requests
 from typing import List, Optional
 from openai import OpenAI
+import sys
+print(f"[DEBUG] API_BASE_URL={os.environ.get('API_BASE_URL', 'NOT SET')}", flush=True, file=sys.stderr)
+print(f"[DEBUG] API_KEY={os.environ.get('API_KEY', 'NOT SET')[:10]}...", flush=True, file=sys.stderr)
 
 API_KEY = os.environ["API_KEY"]
 API_BASE_URL = os.environ["API_BASE_URL"]

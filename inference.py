@@ -82,10 +82,7 @@ Choose your next action from available actions."""
         return "verdict:fraud"
     except Exception as e:
         print(f"[DEBUG] Model error: {e}", flush=True)
-        for a in available:
-            if a.startswith("investigate:"):
-                return a
-        return "verdict:fraud"
+        raise
 
 
 def run_episode(client: OpenAI, task: str) -> None:

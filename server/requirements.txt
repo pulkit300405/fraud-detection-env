@@ -3,4 +3,5 @@ fastapi
 uvicorn
 pydantic
 openai
+httpx
 requests

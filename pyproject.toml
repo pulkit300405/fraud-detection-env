@@ -1,6 +1,6 @@
 [project]
 name = "fraud_detect_env"
-version = "1.0.0"
+version = "0.1.0"
 description = "Fraud Detection RL Environment for OpenEnv"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,12 +9,10 @@ dependencies = [
     "uvicorn",
     "pydantic",
     "openai",
-    "httpx",
-    "requests",
 ]
 
 [project.scripts]
-server = "server.app:app"
+server = "server.app:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -24,12 +22,4 @@ build-backend = "hatchling.build"
 packages = ["."]
 
 [tool.uv]
-dev-dependencies = [
-    "pytest>=7.0",
-    "pytest-asyncio",
-    "httpx",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
+dev-dependencies = []

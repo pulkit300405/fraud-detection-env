@@ -1,64 +1,42 @@
 """
-Fraud Detect Env — inference.py
-================================
-MANDATORY environment variables (injected by Meta's validator):
-  HF_TOKEN      Your Hugging Face API key
-  API_BASE_URL  LLM API endpoint
-  MODEL_NAME    Model identifier
-  ENV_URL       Live environment URL
+Fraud Detect Env — inference.py (Baseline Agent)
+=================================================
+MANDATORY COMPLIANCE (modelled on passing AntiGravity submission):
+- API_BASE_URL : LLM endpoint injected by Meta's validator
+- MODEL_NAME   : Model identifier
+- HF_TOKEN     : API Key injected by Meta's validator
+- TASK_NAME    : Optional task override injected by grader
 
-STDOUT FORMAT (strictly required):
-  [START] task=<n> env=<benchmark> model=<model_name>
-  [STEP]  step=<n> action=<str> reward=<0.00> done=<true|false> error=<msg|null>
-  [END]   task=<n> success=<true|false> steps=<n> score=<0.00> rewards=<r1,r2,...>
+STDOUT FORMAT — strictly required:
+[START] task=<task_name> env=<benchmark> model=<model_name>
+[STEP] step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+[END] success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...>
 """
 
 import os
+import json
+import re
 import sys
-import time
-import textwrap
-from typing import List, Optional
-
 import httpx
 from openai import OpenAI
 
-# ── Environment variables ─────────────────────────────────────────────────────
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
+# ── Environment Configuration ─────────────────────────────────────────────────
+# Use os.getenv() with fallbacks — exactly like the passing submission
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+MODEL_NAME   = os.getenv("MODEL_NAME",   "llama-3.3-70b-versatile")
 HF_TOKEN     = os.getenv("HF_TOKEN")
-ENV_URL      = os.getenv("ENV_URL", "https://Pulkit3004-fraud-detect-env.hf.space").rstrip("/")
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-BENCHMARK             = "fraud_detect_env"
-SUCCESS_SCORE_THRESHOLD = 0.5
-TEMPERATURE           = 0.0
-MAX_TOKENS            = 512
+# HF_TOKEN is what Meta injects as the API key
+API_KEY = HF_TOKEN
 
-TASKS    = ["flag-obvious", "explain-subtle", "adversarial-hunt"]
-MAX_STEPS = {"flag-obvious": 3, "explain-subtle": 5, "adversarial-hunt": 8}
+OPENENV_URL  = os.getenv("OPENENV_URL", "https://Pulkit3004-fraud-detect-env.hf.space").rstrip("/")
+BENCHMARK    = "fraud_detect_env"
 
-SYSTEM_PROMPT = textwrap.dedent("""
-    You are a fraud detection agent investigating suspicious app sessions.
-    You will receive logs of user behavior and must determine if the session is fraudulent.
-
-    Available actions:
-    - investigate:ip_velocity
-    - investigate:device_fingerprint
-    - investigate:login_frequency
-    - investigate:geo_anomaly
-    - investigate:request_pattern
-    - verdict:fraud
-    - verdict:real
-
-    Strategy: investigate signals first to gather evidence, then give a verdict.
-    Reply with ONLY the action string, nothing else. Example: investigate:ip_velocity
-""").strip()
-
-if not HF_TOKEN:
+if not API_KEY:
     print("WARNING: HF_TOKEN not set. LLM calls may fail.", file=sys.stderr)
 
-# Build LLM client — ALL calls go through API_BASE_URL (Meta's proxy)
-llm_client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "dummy")
+# Build client pointing at Meta's LiteLLM proxy via API_BASE_URL
+client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "sk-no-key-set")
 
 
 # ── Structured Log Helpers ────────────────────────────────────────────────────
@@ -66,167 +44,272 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    clean_action = action.replace("\n", " ").replace("\r", " ")
-    error_val    = error if error else "null"
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
+    error_val = error if error else "null"
     print(
-        f"[STEP] step={step} action={clean_action} reward={reward:.2f} "
+        f"[STEP] step={step} action={action} reward={reward:.2f} "
         f"done={str(done).lower()} error={error_val}",
         flush=True,
     )
 
 
-def log_end(task: str, success: bool, steps: int, score: float, rewards: List[float]) -> None:
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] task={task} success={str(success).lower()} steps={steps} "
-        f"score={score:.2f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} "
+        f"score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
 
 
-# ── HTTP helpers ──────────────────────────────────────────────────────────────
+# ── Internal Helpers ──────────────────────────────────────────────────────────
+def _llm_call(system_prompt: str, user_prompt: str) -> str:
+    """All LLM calls go through API_BASE_URL — never bypass this."""
+    try:
+        completion = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0.1,
+            max_tokens=500,
+        )
+        return completion.choices[0].message.content or ""
+    except Exception as e:
+        print(f"[ERROR] LLM call failed: {e}", file=sys.stderr)
+        return ""
+
+
 def _post(path: str, body: dict) -> dict:
-    r = httpx.post(f"{ENV_URL}{path}", json=body, timeout=60)
+    """HTTP POST to the OpenEnv environment."""
+    r = httpx.post(f"{OPENENV_URL}{path}", json=body, timeout=60)
     r.raise_for_status()
     return r.json()
 
 
-# ── LLM action selection ──────────────────────────────────────────────────────
-def get_action(obs: dict, step: int) -> str:
-    """All LLM calls go through API_BASE_URL — never bypass."""
-    logs_summary = f"Session {obs.get('session_id')} has {len(obs.get('logs', []))} log entries."
+def _extract_json(raw: str) -> dict:
+    """Extract JSON from CoT thinking or markdown blocks."""
+    text = raw.strip()
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        return json.loads(match.group(1))
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return json.loads(match.group())
+    return json.loads(text)
+
+
+# ── Task Runners ──────────────────────────────────────────────────────────────
+def run_easy() -> tuple[float, int]:
+    """Task: flag-obvious — obvious fraud with multiple IPs/countries."""
+    obs = _post("/reset", {})
+    obs = obs.get("observation", obs)
+
+    logs_text = json.dumps(obs.get("logs", [])[:5], indent=2)
     signals   = obs.get("signals_revealed", {})
     available = obs.get("available_actions", [])
 
-    user_prompt = textwrap.dedent(f"""
-        Step {step} - Fraud Investigation
-        Task: {obs.get('task')} ({obs.get('difficulty')})
-        {logs_summary}
-        Signals revealed so far: {signals}
-        Available actions: {available}
-        Hint: {obs.get('context_hint', 'None')}
+    system = (
+        "You are a fraud detection agent. Investigate app session logs and detect fraud.\n"
+        "Available actions: investigate:ip_velocity, investigate:device_fingerprint, "
+        "investigate:login_frequency, investigate:geo_anomaly, investigate:request_pattern, "
+        "verdict:fraud, verdict:real\n"
+        "Reply with ONLY the action string. Example: investigate:ip_velocity"
+    )
 
-        Choose your next action from available actions.
-    """).strip()
+    rewards = []
+    step_count = 0
 
-    if not HF_TOKEN:
-        # Safe fallback if no token — picks first investigate action
-        for a in available:
-            if a.startswith("investigate:"):
-                return a
-        return "verdict:fraud"
+    # Investigate one signal first
+    for step in range(1, 4):
+        user = (
+            f"Step {step}\nSession logs (sample):\n{logs_text}\n"
+            f"Signals revealed: {signals}\nAvailable: {available}\n"
+            f"Hint: {obs.get('context_hint', 'Look for obvious fraud signals.')}\n"
+            "Choose your action:"
+        )
+        raw    = _llm_call(system, user)
+        action = raw.strip().split("\n")[0].strip()
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            completion = llm_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_prompt},
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-                stream=False,
-            )
-            action = (completion.choices[0].message.content or "").strip().split("\n")[0].strip()
-            if action in available:
-                return action
-            # Fallback: first investigate, else verdict
+        # Validate action
+        if action not in available:
             for a in available:
                 if a.startswith("investigate:"):
-                    return a
-            return "verdict:fraud"
-        except Exception as exc:
-            if attempt < max_retries - 1:
-                time.sleep((attempt + 1) * 2)
+                    action = a
+                    break
             else:
-                print(f"[ERROR] LLM call failed after retries: {exc}", file=sys.stderr)
+                action = "verdict:fraud"
 
-    return "verdict:fraud"
+        try:
+            res = _post("/step", {"action": {"action": action, "reasoning": "LLM agent investigation"}})
+            obs     = res.get("observation", res)
+            reward  = float(obs.get("reward", 0.0))
+            done    = bool(obs.get("done", False))
+            error   = (obs.get("metadata") or {}).get("last_error")
+            signals = obs.get("signals_revealed", signals)
+            available = obs.get("available_actions", available)
+        except Exception as e:
+            reward, done, error = 0.0, True, str(e)[:80]
+
+        rewards.append(reward)
+        step_count = step
+        log_step(step=step, action=action, reward=reward, done=done, error=error)
+
+        if done:
+            break
+
+    score   = min(max((sum(rewards) + 3.0) / 5.0, 0.0), 1.0)
+    return score, step_count
 
 
-# ── Task runners ──────────────────────────────────────────────────────────────
-def run_task(task: str) -> None:
-    """Your fraud detection logic — untouched. Scaffold upgraded."""
-    log_start(task=task, env=BENCHMARK, model=MODEL_NAME)
+def run_medium() -> tuple[float, int]:
+    """Task: explain-subtle — subtle patterns requiring deeper investigation."""
+    obs = _post("/reset", {})
+    obs = obs.get("observation", obs)
 
-    rewards: List[float] = []
-    steps_taken = 0
-    score = 0.0
-    success = False
+    logs_text = json.dumps(obs.get("logs", []), indent=2)
+    signals   = obs.get("signals_revealed", {})
+    available = obs.get("available_actions", [])
 
-    try:
-        # Reset environment
-        resp = _post("/reset", {})
-        obs  = resp.get("observation", resp)
+    system = (
+        "You are a fraud detection agent investigating subtle fraud patterns.\n"
+        "Investigate multiple signals before giving a verdict.\n"
+        "Reply with ONLY the action string."
+    )
 
-        for step in range(1, MAX_STEPS[task] + 1):
-            if obs.get("done", False):
-                break
+    rewards    = []
+    step_count = 0
 
-            action = get_action(obs, step)
+    for step in range(1, 6):
+        user = (
+            f"Step {step}/5\nLogs:\n{logs_text}\n"
+            f"Signals revealed so far: {signals}\nAvailable actions: {available}\n"
+            "Investigate systematically then give verdict:"
+        )
+        raw    = _llm_call(system, user)
+        action = raw.strip().split("\n")[0].strip()
 
-            resp = _post("/step", {
-                "action": {
-                    "action": action,
-                    "reasoning": "LLM agent fraud investigation"
-                }
-            })
-            obs      = resp.get("observation", resp)
+        if action not in available:
+            investigates = [a for a in available if a.startswith("investigate:")]
+            action = investigates[0] if investigates else "verdict:fraud"
+
+        try:
+            res = _post("/step", {"action": {"action": action, "reasoning": "Systematic investigation"}})
+            obs      = res.get("observation", res)
             reward   = float(obs.get("reward", 0.0))
             done     = bool(obs.get("done", False))
             error    = (obs.get("metadata") or {}).get("last_error")
-
-            rewards.append(reward)
-            steps_taken = step
-            log_step(step=step, action=action, reward=reward, done=done, error=error)
-
-            if done:
-                break
-
-        # Score clipped to [0.01, 0.99] — matches selected submission pattern
-        raw_score = (sum(rewards) + 3.0) / 5.0
-        score     = round(min(max(raw_score, 0.01), 0.99), 2)
-        success   = score >= SUCCESS_SCORE_THRESHOLD
-
-    except Exception as e:
-        print(f"[ERROR] Task {task} failed: {e}", file=sys.stderr)
-
-    finally:
-        log_end(task=task, success=success, steps=steps_taken, score=score, rewards=rewards)
-        print("")  # separator between tasks
-
-
-# ── Entry point ───────────────────────────────────────────────────────────────
-def main() -> None:
-    # TASK_NAME injected by hackathon grader overrides CLI
-    task_override = os.getenv("TASK_NAME")
-    tasks_to_run  = [task_override] if task_override else TASKS
-
-    # Retry loop — HuggingFace containers need time to wake up
-    max_env_retries = 10
-    for attempt in range(max_env_retries):
-        try:
-            # Quick health check before running tasks
-            httpx.get(f"{ENV_URL}/health", timeout=10).raise_for_status()
-
-            for task in tasks_to_run:
-                run_task(task)
-            break  # success — exit retry loop
-
+            signals  = obs.get("signals_revealed", signals)
+            available = obs.get("available_actions", available)
         except Exception as e:
+            reward, done, error = 0.0, True, str(e)[:80]
+
+        rewards.append(reward)
+        step_count = step
+        log_step(step=step, action=action, reward=reward, done=done, error=error)
+
+        if done:
+            break
+
+    score = min(max((sum(rewards) + 3.0) / 5.0, 0.0), 1.0)
+    return score, step_count
+
+
+def run_hard() -> tuple[float, int]:
+    """Task: adversarial-hunt — adversarial fraud mimicking normal behavior."""
+    obs = _post("/reset", {})
+    obs = obs.get("observation", obs)
+
+    logs_text = json.dumps(obs.get("logs", []), indent=2)
+    signals   = obs.get("signals_revealed", {})
+    available = obs.get("available_actions", [])
+
+    system = (
+        "You are an expert fraud analyst hunting adversarial fraud.\n"
+        "The session may look legitimate but contains subtle adversarial patterns.\n"
+        "Investigate ALL available signals before giving a verdict.\n"
+        "Reply with ONLY the action string."
+    )
+
+    rewards    = []
+    step_count = 0
+
+    for step in range(1, 9):
+        user = (
+            f"Step {step}/8 — Adversarial Hunt\nLogs:\n{logs_text}\n"
+            f"Signals revealed: {signals}\nAvailable: {available}\n"
+            "Investigate all signals thoroughly:"
+        )
+        raw    = _llm_call(system, user)
+        action = raw.strip().split("\n")[0].strip()
+
+        if action not in available:
+            investigates = [a for a in available if a.startswith("investigate:")]
+            action = investigates[0] if investigates else "verdict:fraud"
+
+        try:
+            res = _post("/step", {"action": {"action": action, "reasoning": "Deep adversarial investigation"}})
+            obs      = res.get("observation", res)
+            reward   = float(obs.get("reward", 0.0))
+            done     = bool(obs.get("done", False))
+            error    = (obs.get("metadata") or {}).get("last_error")
+            signals  = obs.get("signals_revealed", signals)
+            available = obs.get("available_actions", available)
+        except Exception as e:
+            reward, done, error = 0.0, True, str(e)[:80]
+
+        rewards.append(reward)
+        step_count = step
+        log_step(step=step, action=action, reward=reward, done=done, error=error)
+
+        if done:
+            break
+
+    score = min(max((sum(rewards) + 3.0) / 5.0, 0.0), 1.0)
+    return score, step_count
+
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
+def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", default="all", help="Task to run, or 'all'")
+    args = parser.parse_args()
+
+    # TASK_NAME env var injected by hackathon grader overrides CLI
+    task_override = os.getenv("TASK_NAME")
+    if task_override:
+        args.task = task_override
+
+    task_mappings = [
+        ("flag-obvious",    run_easy),
+        ("explain-subtle",  run_medium),
+        ("adversarial-hunt", run_hard),
+    ]
+
+    if args.task != "all":
+        task_mappings = [t for t in task_mappings if t[0] == args.task]
+        if not task_mappings:
             print(
-                f"Safe retry (attempt {attempt+1}/{max_env_retries}) — "
-                f"waiting for container to wake up: {e}",
-                flush=True,
+                f"Error: Unknown task '{args.task}'. "
+                "Valid: flag-obvious, explain-subtle, adversarial-hunt, all",
+                file=sys.stderr,
             )
-            if attempt < max_env_retries - 1:
-                time.sleep(10)
-            else:
-                print("Fatal: could not connect to environment after retries.", flush=True)
-                sys.exit(0)  # exit(0) not exit(1) — avoids crash flag
+            return
+
+    for task_id, runner in task_mappings:
+        log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+        task_rewards: list[float] = []
+        try:
+            score, steps = runner()
+            task_rewards.append(score)
+            success = score > 0.5
+            log_end(success=success, steps=steps, score=score, rewards=task_rewards)
+        except Exception as e:
+            log_step(step=1, action=f"{task_id}_failed", reward=0.0, done=True, error=str(e)[:80])
+            log_end(success=False, steps=1, score=0.0, rewards=[0.0])
+        print("")  # separator between tasks
 
 
 if __name__ == "__main__":

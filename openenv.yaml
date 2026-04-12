@@ -1,187 +1,28 @@
+spec_version: 1
 name: fraud_detect_env
-version: "1.0.0"
-description: >
-  FraudDetectEnv is an OpenEnv-compliant HTTP environment for intelligent
-  fraud detection. An AI agent investigates synthetic app behavior logs
-  across multiple turns, gathering evidence before issuing a verdict.
-  Features asymmetric rewards, 3 difficulty tiers, and hybrid
-  programmatic + LLM grading.
+version: 1.0.0
+description: "A multi-turn fraud detection RL environment where an AI agent investigates synthetic app behavior logs across 3 difficulty tiers, gathering evidence before issuing a verdict. Features asymmetric rewards and hybrid programmatic grading."
+type: space
+runtime: fastapi
+app: server.app:app
+port: 7860
 
-author: "Pulkit Singh"
-license: MIT
-homepage: "https://huggingface.co/spaces/Pulkit3004/fraud-detect-env"
-repository: "https://huggingface.co/spaces/Pulkit3004/fraud-detect-env/tree/main"
+tags:
+  - openenv
+  - fraud-detection
+  - security
+  - multi-turn
+  - real-world
 
-# ── Tasks ─────────────────────────────────────────────────────────────────────
 tasks:
   - id: flag-obvious
-    level: easy
-    name: "Flag Obvious Fraud"
-    description: >
-      Given app behavior logs with obvious fraud signals (multiple IPs,
-      geo anomalies, admin endpoint access), investigate and give a verdict.
-      Grader: correct verdict = up to +2.0, missed fraud = -3.0, false alarm = -0.5.
-    action_type: verdict
-    reward_range: [-3.0, 2.0]
-    max_steps: 3
-    baseline_score: 0.65
-    grader:
-      type: deterministic
-      method: asymmetric_cost
-      missed_fraud_penalty: -3.0
-      false_alarm_penalty: -0.5
-      correct_fraud_reward: 2.0
-      correct_real_reward: 0.5
+    description: "Easy — obvious fraud with multiple IPs, geo anomalies, admin access. Max 3 steps."
+    grader: server.tasks.compute_step_reward
 
   - id: explain-subtle
-    level: medium
-    name: "Explain Subtle Fraud"
-    description: >
-      Given logs with subtle fraud patterns requiring investigation of
-      multiple signals, classify and explain the reasoning.
-      Requires at least 3 signals investigated for full credit.
-    action_type: verdict
-    reward_range: [-3.0, 2.0]
-    max_steps: 5
-    baseline_score: 0.52
-    grader:
-      type: hybrid
-      method: verdict_plus_reasoning
-      signal_threshold: 3
-      weights:
-        verdict_correct: 0.60
-        signals_investigated: 0.20
-        reasoning_quality: 0.20
+    description: "Medium — subtle patterns requiring investigation of 3+ signals. Max 5 steps."
+    grader: server.tasks.compute_step_reward
 
   - id: adversarial-hunt
-    level: hard
-    name: "Adversarial Fraud Hunt"
-    description: >
-      Given logs crafted to mimic legitimate behavior, hunt for adversarial
-      fraud signals. Requires deep investigation of all 5 signals.
-      Highest penalty for missing fraud.
-    action_type: verdict
-    reward_range: [-3.0, 2.0]
-    max_steps: 8
-    baseline_score: 0.41
-    grader:
-      type: hybrid
-      method: verdict_plus_reasoning
-      signal_threshold: 4
-      weights:
-        verdict_correct: 0.50
-        signals_investigated: 0.30
-        reasoning_quality: 0.20
-
-# ── Observation Space ─────────────────────────────────────────────────────────
-observation_space:
-  type: object
-  required: [session_id, logs, step_num, signals_revealed, available_actions, task, difficulty, done, reward]
-  properties:
-    session_id:
-      type: string
-      description: "Unique ID of the session being investigated"
-    logs:
-      type: array
-      description: "App behavior log entries for the session"
-      items:
-        type: object
-        required: [session_id, timestamp, ip, device, country, event, endpoint]
-        properties:
-          session_id: { type: string }
-          timestamp:  { type: string, format: date-time }
-          ip:         { type: string }
-          device:     { type: string }
-          country:    { type: string }
-          event:      { type: string, enum: [login, page_view, api_call] }
-          endpoint:   { type: string }
-    step_num:
-      type: integer
-      minimum: 0
-      description: "Current step in the episode"
-    signals_revealed:
-      type: object
-      description: "Signals investigated so far and their extracted data"
-    available_actions:
-      type: array
-      description: "Valid actions at this step"
-      items: { type: string }
-    task:
-      type: string
-      enum: [flag-obvious, explain-subtle, adversarial-hunt]
-    difficulty:
-      type: string
-      enum: [easy, medium, hard]
-    context_hint:
-      type: string
-      description: "Hint shown in easy tier only"
-    ground_truth:
-      type: string
-      enum: [fraud, real]
-      description: "Revealed only after episode ends"
-    done:
-      type: boolean
-    reward:
-      type: number
-      description: "Step reward"
-    metadata:
-      type: object
-      properties:
-        cumulative_reward: { type: number }
-        last_error:        { type: string }
-        verdict:           { type: string }
-        signal_data:       { type: object }
-
-# ── Action Space ──────────────────────────────────────────────────────────────
-action_space:
-  type: object
-  required: [action]
-  properties:
-    action:
-      type: string
-      description: "investigate:<signal> or verdict:<fraud|real>"
-      enum:
-        - investigate:ip_velocity
-        - investigate:device_fingerprint
-        - investigate:login_frequency
-        - investigate:geo_anomaly
-        - investigate:request_pattern
-        - verdict:fraud
-        - verdict:real
-    reasoning:
-      type: string
-      description: "Agent's explanation for taking this action"
-
-# ── Reward Structure ──────────────────────────────────────────────────────────
-reward_structure:
-  investigate_new_signal:   +0.1
-  duplicate_investigation:  -0.05
-  invalid_action:           -0.1
-  correct_fraud_verdict:    +2.0
-  correct_real_verdict:     +0.5
-  missed_fraud:             -3.0
-  false_alarm:              -0.5
-  step_cost:                0.0
-  note: "Asymmetric penalty — missing real fraud costs 6x more than a false alarm"
-
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-endpoints:
-  reset:  POST /reset
-  step:   POST /step
-  state:  GET  /state
-  health: GET  /health
-
-# ── Runtime ───────────────────────────────────────────────────────────────────
-runtime:
-  min_vcpu: 2
-  min_memory_gb: 4
-  max_inference_minutes: 20
-  python_version: "3.11"
-
-# ── Deployment ────────────────────────────────────────────────────────────────
-deployment:
-  platform: huggingface_spaces
-  space_id: Pulkit3004/fraud-detect-env
-  sdk: docker
-  port: 7860
-  url: "https://Pulkit3004-fraud-detect-env.hf.space"
+    description: "Hard — adversarially crafted logs mimicking legitimate behavior. Max 8 steps."
+    grader: server.tasks.compute_step_reward

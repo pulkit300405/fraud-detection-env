@@ -5,3 +5,5 @@ pydantic
 openai
 httpx
 requests
+pytest
+pytest-asyncio
